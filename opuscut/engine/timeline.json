@@ -1,0 +1,17 @@
+{
+  "name": "video",
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "bpm": 120,
+  "beats": 32,
+  "beats_per_bar": 4,
+  "blur": { "samples": 4, "shutter": 0.5 },
+  "hold": 1,
+  "pace": "",
+  "scenes": [
+    { "id": "one", "from": 0, "to": 16 },
+    { "id": "two", "from": 16, "to": 32 }
+  ],
+  "cues": []
+}

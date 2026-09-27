@@ -1,0 +1,147 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>opuscut</title>
+<link rel="stylesheet" href="assets/fonts.css">
+<script src="treat.js"></script>
+<style>
+  html, body { margin: 0; background: #000; }
+  canvas { display: block; max-width: 100vw; max-height: 100vh; margin: auto; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+
+const clamp01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
+const lerp = (a, b, t) => a + (b - a) * t;
+const seg = (b, from, len) => len <= 0 ? (b >= from ? 1 : 0) : clamp01((b - from) / len);
+const ease = {
+  linear: t => clamp01(t),
+  inCubic: t => clamp01(t) ** 3,
+  outCubic: t => 1 - (1 - clamp01(t)) ** 3,
+  inOutCubic: t => (t = clamp01(t)) < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2,
+  outExpo: t => (t = clamp01(t)) >= 1 ? 1 : 1 - 2 ** (-10 * t),
+  inExpo: t => (t = clamp01(t)) <= 0 ? 0 : 2 ** (10 * t - 10),
+  outBack: (t, s = 1.70158) => (t = clamp01(t) - 1, t * t * ((s + 1) * t + s) + 1),
+  inBack: (t, s = 1.70158) => (t = clamp01(t), t * t * ((s + 1) * t - s)),
+  outElastic: t => (t = clamp01(t)) === 0 || t === 1 ? t : 2 ** (-10 * t) * Math.sin((t * 10 - 0.75) * (2 * Math.PI) / 3) + 1,
+};
+const spring = (dt, amp, freq = 22, damp = 6) => dt < 0 ? 0 : amp * Math.exp(-dt * damp) * Math.cos(dt * freq);
+
+function rng(seed) {
+  let a = seed | 0;
+  return () => {
+    a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rngFor = key => rng([...String(key)].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619), 2166136261));
+
+let TL, W, H, SPB;
+const main = document.getElementById('c');
+const ctx = main.getContext('2d');
+const layer = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; };
+let world, wctx;
+
+const PLATES = {};
+const plate = id => PLATES[id] ? PLATES[id].img : null;
+async function loadPlates(n) {
+  const t = n / TL.fps;
+  for (const p of TL.plates || []) {
+    const i = Math.floor((t - (p.from || 0) * SPB) * p.fps + 1e-6);
+    if (i < 0 || i >= p.frames) { PLATES[p.id] = null; continue; }
+    if (PLATES[p.id] && PLATES[p.id].i === i) continue;
+    const img = new Image();
+    img.src = `${p.dir}/${String(i).padStart(5, '0')}.${p.ext}`;
+    await img.decode();
+    PLATES[p.id] = { i, img };
+  }
+}
+
+const sceneAt = b => TL.scenes.find(s => b >= s.from && b < s.to) || TL.scenes[TL.scenes.length - 1];
+const local = (b, s) => b - s.from;
+
+function drawWorld(g, b) {
+  const s = sceneAt(b);
+  g.fillStyle = '#222';
+  g.fillRect(0, 0, W, H);
+}
+
+function drawSharp(g, b) {
+}
+
+function drawFinish(g, n, b) {
+}
+
+window.renderFrame = async function (n, fmt = 'jpeg') {
+  const fps = TL.fps;
+  const hold = Math.max(1, TL.hold || 1);
+  const f = Math.floor(n / hold) * hold;
+  if (TL.plates && TL.plates.length) await loadPlates(f);
+  const samples = Math.max(1, TL.blur ? TL.blur.samples : 1);
+  const shutter = TL.blur ? TL.blur.shutter : 0;
+  ctx.globalCompositeOperation = 'source-over';
+  for (let k = 0; k < samples; k++) {
+    const t = Math.max(0, (f + (samples > 1 ? ((k + 0.5) / samples - 0.5) * shutter : 0)) / fps);
+    wctx.save();
+    drawWorld(wctx, t / SPB);
+    wctx.restore();
+    ctx.globalAlpha = 1 / (k + 1);
+    ctx.drawImage(world, 0, 0);
+  }
+  ctx.globalAlpha = 1;
+  const b = f / fps / SPB;
+  ctx.save();
+  drawSharp(ctx, b);
+  ctx.restore();
+  ctx.save();
+  drawFinish(ctx, n, b);
+  ctx.restore();
+  if (fmt === 'none') return null;
+  return main.toDataURL(fmt === 'png' ? 'image/png' : 'image/jpeg', 0.99);
+};
+
+function preview() {
+  const total = Math.round(TL.beats * SPB * TL.fps);
+  let n = 0, playing = true, last = performance.now();
+  addEventListener('keydown', e => {
+    if (e.key === ' ') playing = !playing;
+    if (e.key === 'ArrowRight') n = Math.min(total - 1, n + (e.shiftKey ? TL.fps : 1));
+    if (e.key === 'ArrowLeft') n = Math.max(0, n - (e.shiftKey ? TL.fps : 1));
+    if (!playing) window.renderFrame(n, 'none');
+  });
+  const tick = now => {
+    if (playing) {
+      n = (n + Math.round((now - last) / 1000 * TL.fps)) % total;
+      window.renderFrame(n, 'none');
+    }
+    last = now;
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+window.ready = (async () => {
+  TL = await (await fetch('timeline.json')).json();
+  W = TL.width; H = TL.height; SPB = 60 / TL.bpm;
+  main.width = W; main.height = H;
+  world = layer(); wctx = world.getContext('2d');
+  wctx.imageSmoothingQuality = 'high';
+  ctx.imageSmoothingQuality = 'high';
+  for (const p of TL.plates || []) {
+    const meta = await (await fetch(`${p.dir}/plate.json`)).json();
+    Object.assign(p, { frames: meta.frames, ext: meta.ext, fps: p.fps || meta.fps });
+  }
+  await Promise.all([...document.fonts].map(f => f.load().catch(() => console.warn('font failed: ' + f.family))));
+  await document.fonts.ready;
+  window.__ready = true;
+  if (new URLSearchParams(location.search).has('play')) preview();
+})();
+</script>
+</body>
+</html>
